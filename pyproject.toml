@@ -1,0 +1,56 @@
+[project]
+name = "amplify-bbopt-ext"
+version = "0.1.0"
+description = "Extention library for Fixstars Amplify BBOpt"
+readme = "README.md"
+authors = [
+    { name = "Yuya Seki", email = "y.seki.14870@gmail.com" }
+]
+requires-python = ">=3.10"
+dependencies = [
+    "amplify-bbopt>=1.0.3",
+    "matplotlib>=3.10.7",
+    "numpy>=2.2.6",
+]
+
+[build-system]
+requires = ["uv_build>=0.9.9,<0.10.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "jupyterlab>=4.5.0",
+    "pyright>=1.1.407",
+]
+
+[project.optional-dependencies]
+cpu = [
+  "torch>=2.7.0",
+]
+cu128 = [
+  "torch>=2.7.0",
+]
+
+[tool.uv]
+conflicts = [
+  [
+    { extra = "cpu" },
+    { extra = "cu128" },
+  ],
+]
+
+[tool.uv.sources]
+torch = [
+  { index = "pytorch-cpu", extra = "cpu" },
+  { index = "pytorch-cu128", extra = "cu128" },
+]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
