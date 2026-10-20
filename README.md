@@ -15,6 +15,7 @@ Fixstars Amplify BBOptに基づいた，ブラックボックス離散最適化�
 このライブラリでは，ブラックボックス離散最適化問題のために研究・開発した以下の最適化手法をAmplify BBOptに基づいて実装しています．
 
 - [SWIFT-FMQA](./examples/fmqa_latest.ipynb)
+- [LHS/Sobol'-FMQA](./examples/lhs_sobol_fmqa.ipynb)
 - （今後も追加予定）
 
 国立研究開発法人産業技術総合研究所量子・AI融合技術グローバル研究センター（G-QuAT）の保有する量子・古典融合計算基盤ABCI-Qのコンピューティングリソースを活用して，研究成果に基づく最適化手法を検証することができます．
@@ -33,7 +34,7 @@ from amplify_bbopt import (
     blackbox,
 )
 from amplify import FixstarsClient
-from amplify_bbopt_ext.latest_filter import run
+from amplify_bbopt_ext.runner import run
 
 from datetime import timedelta
 import numpy as np
@@ -115,31 +116,39 @@ result = run(
 # 結果の可視化
 ###############################################################################
 import matplotlib.pyplot as plt
+import numpy as np
 
-# 初期学習データ
-objectives_init = result.training_data.y[:n_init_data]
+# 最適化履歴からこれまでの最小値（Best Objective Value）の推移を計算
+y_history = result.training_data.y
+best_y = np.minimum.accumulate(y_history)
 
-# アニーリングから直接得られたベスト解の履歴
-objectives_annealing_best = [
-    float(h.annealing_best_solution.objective) for h in result.history
-]
+fig, ax = plt.subplots(figsize=(10, 6))
+n_initial = len(initial_samples)
 
-# フォールバック解も含めた最良解の履歴
-objectives_all = [
-    float(h.annealing_new_solution.objective)
-    if h.fallback_solution is None
-    else float(h.fallback_solution.objective)
-    for h in result.history
-]
+# 評価回数（x軸）は 1 からスタート
+x_evals = np.arange(1, len(best_y) + 1)
 
-plt.plot(range(-n_init_data + 1, 1), objectives_init, "blue")
-plt.plot(range(1, len(objectives_all) + 1), objectives_all, "lightgrey")
-plt.plot(range(1, len(objectives_annealing_best) + 1), objectives_annealing_best, "-r")
+# 全サンプリング点の散布図
+ax.scatter(x_evals, y_history, color='tab:blue', alpha=0.3, label='Sampled Points', s=20)
 
-plt.xlabel("Cycle")
-plt.ylabel("Objective value")
+# これまでの最小値の推移の折れ線
+ax.plot(x_evals, best_y, linestyle='-', color='tab:red', label='Best Objective Value')
 
-plt.grid(True)
+# フェーズの境界線
+ax.axvline(x=n_initial, color='k', linestyle='--', alpha=0.5, label='End of Initial Data')
+
+# 背景を色分けしてフェーズを区別
+ax.axvspan(0, n_initial, alpha=0.1, color='gray', label='Initial Sampling Phase')
+ax.axvspan(n_initial, len(best_y) + 1, alpha=0.05, color='green', label='FMQA Optimization Phase')
+
+ax.set_xlabel('Number of evaluations', fontsize=16)
+ax.set_ylabel('Objective value', fontsize=16)
+ax.set_title('Optimization History on Rastrigin function', fontsize=18)
+ax.legend(fontsize=12)
+ax.tick_params(axis='both', which='major', labelsize=14)
+ax.grid(True, linestyle=':', alpha=0.7)
+plt.tight_layout()
+plt.show()
 ```
 
 ## インストール

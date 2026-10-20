@@ -100,6 +100,8 @@ dependencies = [
     { name = "matplotlib" },
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or (extra == 'extra-17-amplify-bbopt-ext-cpu' and extra == 'extra-17-amplify-bbopt-ext-cu128')" },
     { name = "numpy", version = "2.3.5", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11' or (extra == 'extra-17-amplify-bbopt-ext-cpu' and extra == 'extra-17-amplify-bbopt-ext-cu128')" },
+    { name = "scipy", version = "1.15.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or (extra == 'extra-17-amplify-bbopt-ext-cpu' and extra == 'extra-17-amplify-bbopt-ext-cu128')" },
+    { name = "scipy", version = "1.16.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11' or (extra == 'extra-17-amplify-bbopt-ext-cpu' and extra == 'extra-17-amplify-bbopt-ext-cu128')" },
 ]
 
 [package.optional-dependencies]
@@ -122,6 +124,7 @@ requires-dist = [
     { name = "amplify-bbopt", specifier = ">=1.0.3" },
     { name = "matplotlib", specifier = ">=3.10.7" },
     { name = "numpy", specifier = ">=2.2.6" },
+    { name = "scipy", specifier = ">=1.15.3" },
     { name = "torch", marker = "extra == 'cpu'", specifier = ">=2.7.0", index = "https://download.pytorch.org/whl/cpu", conflict = { package = "amplify-bbopt-ext", extra = "cpu" } },
     { name = "torch", marker = "extra == 'cu128'", specifier = ">=2.7.0", index = "https://download.pytorch.org/whl/cu128", conflict = { package = "amplify-bbopt-ext", extra = "cu128" } },
 ]
