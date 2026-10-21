@@ -1,3 +1,5 @@
+from collections.abc import Callable
+from functools import partial
 from itertools import product
 from logging import getLogger
 
@@ -17,7 +19,9 @@ from amplify_bbopt.encoder import decode_values
 from amplify_bbopt.optimizer import FlattenedSolution
 from amplify_bbopt.trainer import Dataset, Trainer
 from amplify_bbopt.bbopt_logging import AMPLIFY_BBOPT_LOGGER_NAME
+from torch.optim.lr_scheduler import LRScheduler
 
+from . import runner
 from .training import BasicFMTrainer
 
 logger = getLogger(AMPLIFY_BBOPT_LOGGER_NAME)
@@ -654,38 +658,76 @@ def encoding_switch_optimizer(
     )
 
 
+# 文字列で指定するエンコーディング方式と（学習時，探索時）のエンコーディングの対応
+_ENCODINGS = {
+    "Oh": (EncodingMethod.OneHot, EncodingMethod.OneHot),
+    "Dw": (EncodingMethod.DomainWall, EncodingMethod.DomainWall),
+    "OhDw": (EncodingMethod.OneHot, EncodingMethod.DomainWall),
+    "DwOh": (EncodingMethod.DomainWall, EncodingMethod.OneHot),
+}
+
+
+def _discretized_blackbox(
+    bb_func: Callable[[np.ndarray], float],
+    N: int,
+    L: float,
+    M: float,
+    q: int,
+    encoding: EncodingMethod,
+) -> BlackBoxFuncBase:
+    """[L, M] を q 点に離散化した N 個の実数変数を入力とするブラックボックス関数を作る。"""
+
+    @blackbox
+    def discretized_blackbox(
+        x: list[float] = [  # pyright: ignore[reportArgumentType]
+            RealVariable(
+                bounds=(L, M),
+                encoding=encoding,
+                discretization_spec=DiscretizationSpec(num_bins=q),
+            )
+            for _ in range(N)
+        ],
+    ) -> float:
+        return float(bb_func(np.asarray(x, dtype=float)))
+
+    return discretized_blackbox
+
+
 def run(
-    client,
-    bb_func,
+    client: BaseClient,
+    bb_func: Callable[[np.ndarray], float],
+    n_iter: int,
+    initial_data: np.ndarray,
+    *,
     N: int,
     q: int,
     L: float,
     M: float,
     encoding: str,
-    k: int,
-    n_iter: int,
-    initial_data: np.ndarray,
+    num_factors: int,
     epochs: int,
     optimizer_params: dict,
-    lr_scheduler_class=None,
+    lr_scheduler_class: type[LRScheduler] | None = None,
     lr_scheduler_params: dict | None = None,
-    *,
-    seed: int = 0,
+    num_threads: int | None = None,
     encoding_penalty: float = 1000.0,
-    max_deduplication_trials: int | None = 100,
-):
-    """指定されたエンコーディング方式でFMQAを実行する。"""
+    max_deduplication_trials: int | None = None,
+) -> Optimizer:
+    """指定されたエンコーディング方式でFMQAを実行する。
 
-    valid_encodings = {"Oh", "Dw", "OhDw", "DwOh"}
-    if encoding not in valid_encodings:
+    initial_data は実数値の (データ数, N) 配列で与える。
+    """
+
+    if encoding not in _ENCODINGS:
         raise ValueError(
-            f"encodingには{sorted(valid_encodings)}のいずれかを指定してください。"
+            f"encodingには{sorted(_ENCODINGS)}のいずれかを指定してください。"
             f"指定された値: {encoding!r}"
         )
     if N <= 0 or q <= 1:
         raise ValueError("Nには1以上、qには2以上の整数を指定してください。")
     if L >= M:
         raise ValueError("探索範囲の下限Lは上限Mより小さくしてください。")
+    # ブラックボックス関数を評価する前に引数の誤りを検出する
     if encoding_penalty <= 0:
         raise ValueError("encoding_penaltyには正の値を指定してください。")
     if max_deduplication_trials is not None and max_deduplication_trials < 0:
@@ -695,65 +737,25 @@ def run(
         )
 
     data = np.asarray(initial_data, dtype=float)
-    if data.ndim != 2:
-        raise ValueError("initial_dataは2次元配列にしてください。")
+    if data.ndim != 2 or data.shape[1] != N:
+        raise ValueError(f"initial_dataは列数{N}の2次元配列にしてください。")
 
-    training_mode = "Oh" if encoding in {"Oh", "OhDw"} else "Dw"
-    expected_size = N * q if training_mode == "Oh" else N * (q - 1)
-    if data.shape[1] == expected_size:
-        dataset_x = X_Any_to_Real(N, L, M, q, data, training_mode)
-    elif data.shape[1] == N:
-        dataset_x = data
-    else:
-        raise ValueError(
-            f"{training_mode}のinitial_dataの列数は{N}または"
-            f"{expected_size}にしてください。"
-        )
-
-    variable_encoding = (
-        EncodingMethod.OneHot
-        if training_mode == "Oh"
-        else EncodingMethod.DomainWall
-    )
-
-    @blackbox
-    def optimization_blackbox(
-        x: list[float] = [
-            RealVariable(
-                bounds=(L, M),
-                encoding=variable_encoding,
-                discretization_spec=DiscretizationSpec(num_bins=q),
-            )
-            for _ in range(N)
-        ],
-    ):
-        return float(bb_func(np.asarray(x, dtype=float)))
-
-    dataset_y = np.asarray(
-        [optimization_blackbox(x) for x in dataset_x], dtype=float
-    )
-    trainer = BasicFMTrainer()
-    trainer.epochs = epochs
-    trainer.optimizer_params = optimizer_params
-    trainer.lr_scheduler_class = lr_scheduler_class
-    trainer.lr_scheduler_params = lr_scheduler_params or {}
-    trainer.num_factors = k
-
-    optimizer = EncodingSwitchOptimizer(
-        blackbox=optimization_blackbox,
-        trainer=trainer,
-        client=client,
-        training_data=Dataset(dataset_x, dataset_y),
-        seed=seed,
-        search_encoding=(
-            EncodingMethod.DomainWall
-            if encoding in {"Dw", "OhDw"}
-            else EncodingMethod.OneHot
-        ),
-        encoding_penalty=encoding_penalty,
-    )
-    optimizer.optimize(
+    training_encoding, search_encoding = _ENCODINGS[encoding]
+    return runner.run(
+        client,
+        _discretized_blackbox(bb_func, N, L, M, q, training_encoding),
         n_iter,
+        data,
+        num_factors=num_factors,
+        epochs=epochs,
+        optimizer_params=optimizer_params,
+        lr_scheduler_class=lr_scheduler_class,
+        lr_scheduler_params=lr_scheduler_params,
+        num_threads=num_threads,
+        make_optimizer=partial(
+            encoding_switch_optimizer,
+            search_encoding=search_encoding,
+            encoding_penalty=encoding_penalty,
+        ),
         max_deduplication_trials=max_deduplication_trials,
     )
-    return optimizer

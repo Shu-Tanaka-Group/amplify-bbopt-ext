@@ -2,6 +2,7 @@ import pickle
 import unittest
 from functools import partial
 from itertools import product
+from typing import Any
 from unittest.mock import patch
 
 import numpy as np
@@ -132,32 +133,6 @@ class TestQuboConversion(unittest.TestCase):
                 )
 
         self.assertIn("QUBO conversion verification failed", logs.output[0])
-
-    @patch("amplify_bbopt_ext.qubo_conversion.EncodingSwitchOptimizer")
-    def test_run_uses_robust_deduplication_trial_default(
-        self, optimizer_class
-    ) -> None:
-        optimizer = optimizer_class.return_value
-
-        result = run(
-            client=object(),
-            bb_func=lambda x: float(np.sum(x)),
-            N=2,
-            q=3,
-            L=-1.0,
-            M=1.0,
-            encoding="Oh",
-            k=2,
-            n_iter=1,
-            initial_data=np.array([[0.0, 0.0]]),
-            epochs=1,
-            optimizer_params={"lr": 0.01},
-        )
-
-        self.assertIs(result, optimizer)
-        optimizer.optimize.assert_called_once_with(
-            1, max_deduplication_trials=100
-        )
 
     def test_domain_wall_to_one_hot_preserves_energy(self) -> None:
         for num_variables, num_bins in ((1, 3), (2, 5), (3, 7)):
@@ -418,6 +393,101 @@ class EncodingSwitchOptimizerFactoryTest(unittest.TestCase):
         self.assertEqual(
             restored.keywords, {"search_encoding": EncodingMethod.DomainWall}
         )
+
+
+class RunTest(unittest.TestCase):
+    _params: dict[str, Any] = dict(
+        N=2,
+        q=3,
+        L=-1.0,
+        M=1.0,
+        num_factors=2,
+        epochs=1,
+        optimizer_params={"lr": 0.01},
+    )
+
+    def _run(self, encoding: str, **kwargs):
+        with patch("amplify_bbopt_ext.runner.run") as runner_run:
+            result = run(
+                FixstarsClient(),
+                lambda x: float(np.sum(x)),
+                5,
+                np.array([[0.0, 1.0]]),
+                encoding=encoding,
+                **{**self._params, **kwargs},
+            )
+        self.assertIs(result, runner_run.return_value)
+        return runner_run.call_args
+
+    def test_delegates_to_runner_run(self) -> None:
+        call = self._run("OhDw", encoding_penalty=10.0, max_deduplication_trials=7)
+
+        bb_func = call.args[1]
+        variables = list(bb_func.flattened_variables_dict.values())
+        self.assertEqual(len(variables), 2)
+        for variable in variables:
+            self.assertEqual(variable.encoding.method, EncodingMethod.OneHot)
+            self.assertEqual(variable.possible_values, [-1.0, 0.0, 1.0])
+        self.assertEqual(bb_func(np.array([0.0, 1.0])), 1.0)
+        self.assertEqual(call.args[2], 5)
+        np.testing.assert_array_equal(call.args[3], [[0.0, 1.0]])
+        self.assertEqual(call.kwargs["num_factors"], 2)
+        self.assertEqual(call.kwargs["max_deduplication_trials"], 7)
+        make_optimizer = call.kwargs["make_optimizer"]
+        self.assertIs(make_optimizer.func, encoding_switch_optimizer)
+        self.assertEqual(
+            make_optimizer.keywords,
+            {"search_encoding": EncodingMethod.DomainWall, "encoding_penalty": 10.0},
+        )
+
+    def test_maps_encoding_names(self) -> None:
+        cases = {
+            "Oh": (EncodingMethod.OneHot, EncodingMethod.OneHot),
+            "Dw": (EncodingMethod.DomainWall, EncodingMethod.DomainWall),
+            "OhDw": (EncodingMethod.OneHot, EncodingMethod.DomainWall),
+            "DwOh": (EncodingMethod.DomainWall, EncodingMethod.OneHot),
+        }
+        for encoding, (training, search) in cases.items():
+            with self.subTest(encoding=encoding):
+                call = self._run(encoding)
+
+                variables = call.args[1].flattened_variables_dict.values()
+                self.assertEqual({v.encoding.method for v in variables}, {training})
+                self.assertEqual(
+                    call.kwargs["make_optimizer"].keywords["search_encoding"], search
+                )
+
+    def test_rejects_invalid_arguments_before_running(self) -> None:
+        cases = {
+            "encoding": dict(encoding="Bi"),
+            "bounds": dict(L=1.0, M=-1.0),
+            "penalty": dict(encoding_penalty=0.0),
+            "deduplication": dict(max_deduplication_trials=-1),
+        }
+        for name, kwargs in cases.items():
+            with self.subTest(name), patch("amplify_bbopt_ext.runner.run") as runner_run:
+                with self.assertRaises(ValueError):
+                    run(
+                        FixstarsClient(),
+                        lambda x: 0.0,
+                        5,
+                        np.array([[0.0, 1.0]]),
+                        **{**self._params, "encoding": "OhDw", **kwargs},
+                    )
+                runner_run.assert_not_called()
+
+    def test_rejects_encoded_initial_data(self) -> None:
+        one_hot = np.array([[1, 0, 0, 0, 0, 1]], dtype=float)
+
+        with self.assertRaises(ValueError):
+            run(
+                FixstarsClient(),
+                lambda x: 0.0,
+                5,
+                one_hot,
+                encoding="OhDw",
+                **self._params,
+            )
 
 
 if __name__ == "__main__":
