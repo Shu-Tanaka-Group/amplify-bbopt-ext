@@ -1,7 +1,6 @@
 import numpy as np
 
-from .utils import BasicFMTrainer
-from .latest_filter import LatestDataset, LatestDatasetOptimizer
+from .training import BasicFMTrainer, LatestDataset, LatestDatasetOptimizer
 
 def run(
     client,

@@ -1,6 +1,6 @@
 from amplify_bbopt import Optimizer
 
-from .utils import BasicFMTrainer
+from .training import BasicFMTrainer
 
 
 def single_run(
