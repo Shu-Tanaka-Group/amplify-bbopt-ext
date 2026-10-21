@@ -14,7 +14,9 @@ from .training import BasicFMTrainer, LatestDataset, LatestDatasetOptimizer
 
 # 並列実行（multiprocessing）で渡す場合は pickle 可能である必要があるため，
 # lambda やクロージャではなくモジュールレベル関数の functools.partial を使う．
-OptimizerFactory = Callable[[BlackBoxFuncBase, Trainer, BaseClient, Dataset], Optimizer]
+OptimizerFactory = Callable[
+    [BlackBoxFuncBase, Trainer, BaseClient, Dataset, int], Optimizer
+]
 
 
 def fm_trainer(
@@ -61,9 +63,13 @@ def _check_training_params(trainer: BasicFMTrainer) -> None:
 
 
 def plain_optimizer(
-    blackbox: BlackBoxFuncBase, trainer: Trainer, client: BaseClient, dataset: Dataset
+    blackbox: BlackBoxFuncBase,
+    trainer: Trainer,
+    client: BaseClient,
+    dataset: Dataset,
+    seed: int,
 ) -> Optimizer:
-    return Optimizer(blackbox, trainer, client, training_data=dataset)
+    return Optimizer(blackbox, trainer, client, training_data=dataset, seed=seed)
 
 
 def latest_optimizer(
@@ -71,6 +77,7 @@ def latest_optimizer(
     trainer: Trainer,
     client: BaseClient,
     dataset: Dataset,
+    seed: int,
     *,
     size_limit: int,
 ) -> LatestDatasetOptimizer:
@@ -79,6 +86,7 @@ def latest_optimizer(
         trainer,
         client,
         training_data=LatestDataset(dataset.x, dataset.y, size_limit),
+        seed=seed,
     )
 
 
@@ -96,6 +104,7 @@ def run(
     num_threads: int | None = None,
     make_optimizer: OptimizerFactory = plain_optimizer,
     max_deduplication_trials: int | None = None,
+    seed: int = 0,
 ) -> Optimizer:
     # BasicFMTrainer の None（スレッド数を変更しない）とは異なり，None は CPU 数を意味する
     trainer = fm_trainer(
@@ -108,6 +117,8 @@ def run(
     )
     dataset_x = np.asarray(initial_data)
     dataset_y = np.array([bb_func(x) for x in dataset_x])
-    optimizer = make_optimizer(bb_func, trainer, client, Dataset(dataset_x, dataset_y))
+    optimizer = make_optimizer(
+        bb_func, trainer, client, Dataset(dataset_x, dataset_y), seed
+    )
     optimizer.optimize(n_iter, max_deduplication_trials)
     return optimizer

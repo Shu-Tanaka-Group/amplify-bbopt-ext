@@ -35,17 +35,23 @@ _trainer_params = {"num_factors": 4, "epochs": 10, "optimizer_params": {"lr": 0.
 
 
 class _StubOptimizer:
-    def __init__(self, blackbox, trainer, client, dataset) -> None:
+    def __init__(self, blackbox, trainer, client, dataset, seed) -> None:
         self.blackbox = blackbox
         self.trainer = trainer
         self.client = client
         self.dataset = dataset
+        self.seed = seed
         self.n_iter: int | None = None
         self.max_deduplication_trials: int | None = None
 
     def optimize(self, n_iter: int, max_deduplication_trials: int | None) -> None:
         self.n_iter = n_iter
         self.max_deduplication_trials = max_deduplication_trials
+
+
+def _assert_seeded(optimizer: Optimizer, seed: int) -> None:
+    expected = np.random.default_rng(seed).random(5)
+    np.testing.assert_array_equal(optimizer.rng.random(5), expected)
 
 
 class FmTrainerTest(unittest.TestCase):
@@ -114,23 +120,25 @@ class OptimizerFactoryTest(unittest.TestCase):
 
     def test_plain_optimizer(self) -> None:
         optimizer = plain_optimizer(
-            _bb_func, BasicFMTrainer(), FixstarsClient(), self._dataset()
+            _bb_func, BasicFMTrainer(), FixstarsClient(), self._dataset(), 3
         )
 
         self.assertIs(type(optimizer), Optimizer)
         np.testing.assert_array_equal(optimizer.training_data.x, _initial_data)
+        _assert_seeded(optimizer, 3)
 
     def test_latest_optimizer_applies_size_limit(self) -> None:
         make_optimizer = partial(latest_optimizer, size_limit=2)
 
         optimizer = make_optimizer(
-            _bb_func, BasicFMTrainer(), FixstarsClient(), self._dataset()
+            _bb_func, BasicFMTrainer(), FixstarsClient(), self._dataset(), 3
         )
 
         self.assertIsInstance(optimizer, LatestDatasetOptimizer)
         self.assertIsInstance(optimizer.training_data, LatestDataset)
         np.testing.assert_array_equal(optimizer.training_data.x, _initial_data[-2:])
         np.testing.assert_array_equal(optimizer.training_data.y, [2.0, 3.0])
+        _assert_seeded(optimizer, 3)
 
     def test_latest_optimizer_partial_is_picklable(self) -> None:
         make_optimizer = partial(latest_optimizer, size_limit=2)
@@ -195,11 +203,17 @@ class RunTest(unittest.TestCase):
         np.testing.assert_array_equal(result.dataset.y, [1.0, 2.0, 3.0])
         self.assertEqual(result.n_iter, 5)
         self.assertIsNone(result.max_deduplication_trials)
+        self.assertEqual(result.seed, 0)
 
     def test_passes_max_deduplication_trials(self) -> None:
         result = self._run(max_deduplication_trials=7)
 
         self.assertEqual(result.max_deduplication_trials, 7)
+
+    def test_passes_seed(self) -> None:
+        result = self._run(seed=11)
+
+        self.assertEqual(result.seed, 11)
 
     def test_invalid_params_fail_before_evaluating_blackbox(self) -> None:
         calls = []
