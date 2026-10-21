@@ -558,6 +558,7 @@ def encoding_switch_optimizer(
     trainer: Trainer,
     client: BaseClient,
     dataset: Dataset,
+    seed: int,
     *,
     search_encoding: EncodingMethod,
     encoding_penalty: float = 1000.0,
@@ -569,4 +570,5 @@ def encoding_switch_optimizer(
         search_encoding=search_encoding,
         encoding_penalty=encoding_penalty,
         training_data=dataset,
+        seed=seed,
     )

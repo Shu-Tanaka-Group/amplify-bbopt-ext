@@ -374,12 +374,16 @@ class EncodingSwitchOptimizerFactoryTest(unittest.TestCase):
             BasicFMTrainer(),
             FixstarsClient(),
             Dataset(data_x, np.array([1.0, 2.0])),
+            3,
         )
 
         self.assertIsInstance(optimizer, EncodingSwitchOptimizer)
         self.assertEqual(optimizer._search_encoding, EncodingMethod.DomainWall)
         self.assertEqual(optimizer._encoding_penalty, 10.0)
         np.testing.assert_array_equal(optimizer.training_data.x, data_x)
+        np.testing.assert_array_equal(
+            optimizer.rng.random(5), np.random.default_rng(3).random(5)
+        )
 
     def test_partial_is_picklable(self) -> None:
         make_optimizer = partial(
