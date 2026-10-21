@@ -17,7 +17,7 @@ from amplify_bbopt.optimizer import FlattenedSolution
 from amplify_bbopt.trainer import Dataset
 from amplify_bbopt.bbopt_logging import AMPLIFY_BBOPT_LOGGER_NAME
 
-from .utils import BasicFMTrainer
+from .training import BasicFMTrainer
 
 logger = getLogger(AMPLIFY_BBOPT_LOGGER_NAME)
 
@@ -795,7 +795,7 @@ def run(
             )
 
         @blackbox
-        def optimization_blackbox(
+        def optimization_blackbox(  # pyright: ignore[reportRedeclaration]
             x: list[int] = [BinaryVariable() for _ in range(expected_size)],
         ):
             real_x = X_Bi_to_Real(N, L, M, q, np.asarray(x))
