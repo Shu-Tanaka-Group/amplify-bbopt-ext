@@ -3,10 +3,18 @@ from __future__ import annotations
 import warnings
 from collections.abc import Sequence
 from abc import ABC, abstractmethod
+from typing import TYPE_CHECKING, Union
 
 import numpy as np
-from numpy.typing import ArrayLike, NDArray
+from numpy.typing import NDArray
 from scipy.stats import qmc
+
+if TYPE_CHECKING:
+    from amplify_bbopt import BlackBoxFuncBase
+
+# Same convention as `amplify_bbopt.Variable.possible_values`:
+# a tuple `(lower, upper)` for a continuous variable, a list of candidates for a discrete variable.
+PossibleValues = Union[tuple[float, float], Sequence[float]]
 
 
 class SampleGenerator(ABC):
@@ -20,12 +28,18 @@ class QRS(SampleGenerator):
     The underlying sampler is created once and kept, so successive calls of
     :meth:`generate` continue the sequence instead of repeating it.
 
+    Points in the unit hypercube are mapped to each variable as follows:
+    a continuous variable is scaled to ``[lower, upper]``, and a discrete
+    variable takes the candidate ``floor(u * k)`` out of its ``k`` candidates,
+    so that every candidate (one-hot bit) is assigned an equal share of ``[0, 1)``.
+
+    Constraints among variables are not taken into account.
+
     Args:
         method: Sampling method, either ``"lhs"`` or ``"sobol"``.
-        lower_bounds: Lower bounds of continuous variables.
-        upper_bounds: Upper bounds of continuous variables.
-        variable_values: Candidate values of each discrete variable. Takes
-            precedence over ``lower_bounds`` and ``upper_bounds``.
+        possible_values: Possible values of each variable in the same format as
+            ``amplify_bbopt.Variable.possible_values``: a tuple ``(lower, upper)``
+            for a continuous variable, or a list of candidates for a discrete one.
         seed: Seed or generator passed to the underlying sampler.
         scramble: Whether to scramble the Sobol' sequence.
     """
@@ -35,10 +49,8 @@ class QRS(SampleGenerator):
     def __init__(
         self,
         method: str,
+        possible_values: Sequence[PossibleValues],
         *,
-        lower_bounds: ArrayLike | None = None,
-        upper_bounds: ArrayLike | None = None,
-        variable_values: Sequence[Sequence[object]] | None = None,
         seed: int | np.random.Generator | None = None,
         scramble: bool = True,
     ) -> None:
@@ -46,23 +58,23 @@ class QRS(SampleGenerator):
         if self.method not in self.METHODS:
             raise ValueError(f"Unknown method {method!r}; expected one of {self.METHODS}.")
 
-        self.lower_bounds = lower_bounds
-        self.upper_bounds = upper_bounds
-        self.variable_values = variable_values
+        if len(possible_values) == 0:
+            raise ValueError("possible_values must contain at least one variable.")
+        self.possible_values = list(possible_values)
+        self.n_dim = len(self.possible_values)
 
-        if variable_values is not None:
-            self.n_dim = len(variable_values)
-        elif lower_bounds is not None and upper_bounds is not None:
-            self.n_dim = len(np.asarray(lower_bounds))
-        else:
-            raise ValueError("Either variable_values or (lower_bounds, upper_bounds) must be provided.")
-
-        if variable_values is not None:
-            self._value_arrays = [np.asarray(v) for v in variable_values]
-            if any(v.size == 0 for v in self._value_arrays):
-                raise ValueError("Each entry of variable_values must have at least one candidate.")
-            numeric_only = all(v.dtype.kind in "biufc" for v in self._value_arrays)
-            self._dtype = np.result_type(*(v.dtype for v in self._value_arrays)) if numeric_only else object
+        # None for a continuous variable, candidate values for a discrete variable.
+        self._candidates: list[NDArray[np.float64] | None] = []
+        for index, values in enumerate(self.possible_values):
+            if isinstance(values, tuple):
+                if len(values) != 2 or values[0] > values[1]:
+                    raise ValueError(f"Variable {index}: bounds must be a tuple (lower, upper) with lower <= upper.")
+                self._candidates.append(None)
+            else:
+                candidates = np.asarray(values, dtype=np.float64)
+                if candidates.size == 0:
+                    raise ValueError(f"Variable {index}: candidates must not be empty.")
+                self._candidates.append(candidates)
 
         self._sampler: qmc.QMCEngine
         if self.method == "lhs":
@@ -70,7 +82,25 @@ class QRS(SampleGenerator):
         else:
             self._sampler = qmc.Sobol(d=self.n_dim, scramble=scramble, rng=seed)
 
-    def generate(self, n_samples: int) -> NDArray[np.generic]:
+    @classmethod
+    def from_blackbox(
+        cls,
+        method: str,
+        blackbox: BlackBoxFuncBase,
+        *,
+        seed: int | np.random.Generator | None = None,
+        scramble: bool = True,
+    ) -> QRS:
+        """Create a sampler for the variables of an ``amplify_bbopt`` black-box function.
+
+        Columns of the generated samples follow the order of
+        ``blackbox.flattened_variables_dict``, which is the input format of
+        ``amplify_bbopt.Optimizer``.
+        """
+        possible_values = [var.possible_values for var in blackbox.flattened_variables_dict.values()]
+        return cls(method, possible_values, seed=seed, scramble=scramble)
+
+    def generate(self, n_samples: int) -> NDArray[np.float64]:
         """Generate the next ``n_samples`` samples with the configured method."""
         if n_samples < 1:
             raise ValueError(f"n_samples must be a positive integer, got {n_samples}.")
@@ -92,24 +122,38 @@ class QRS(SampleGenerator):
         else:
             unit_samples = self._sampler.random(n=n_samples)
 
-        if self.variable_values is not None:
-            initial_data = np.empty(unit_samples.shape, dtype=self._dtype)
-            for column, val_arr in enumerate(self._value_arrays):
-                indices = np.minimum((unit_samples[:, column] * val_arr.size).astype(int), val_arr.size - 1)
-                initial_data[:, column] = val_arr[indices]
+        samples = np.empty(unit_samples.shape, dtype=np.float64)
+        uncovered: list[int] = []
+        for column, candidates in enumerate(self._candidates):
+            unit_column = unit_samples[:, column]
+            if candidates is None:
+                lower, upper = self.possible_values[column]
+                samples[:, column] = lower + (upper - lower) * unit_column
+            else:
+                n_candidates = candidates.size
+                indices = np.minimum((unit_column * n_candidates).astype(int), n_candidates - 1)
+                samples[:, column] = candidates[indices]
+                if not _covers_all_candidates(n_samples, n_candidates):
+                    uncovered.append(column)
 
-            uncovered = [column for column, val_arr in enumerate(self._value_arrays) if n_samples % val_arr.size != 0]
-            if uncovered:
-                warnings.warn(
-                    f"n_samples={n_samples} is not a multiple of the number of candidates of "
-                    f"variables {uncovered}; full coverage of candidates is not guaranteed.",
-                    UserWarning,
-                    stacklevel=2,
-                )
-            return initial_data
-        else:
-            assert self.lower_bounds is not None and self.upper_bounds is not None
-            return qmc.scale(unit_samples, self.lower_bounds, self.upper_bounds)
+        if uncovered:
+            warnings.warn(
+                f"n_samples={n_samples} does not guarantee that every candidate of variables "
+                f"{uncovered} appears at least once.",
+                UserWarning,
+                stacklevel=2,
+            )
+        return samples
 
 
-__all__ = ["QRS", "SampleGenerator"]
+def _covers_all_candidates(n_samples: int, n_candidates: int) -> bool:
+    """Whether one point per ``[i/n, (i+1)/n)`` always hits every ``[j/k, (j+1)/k)``.
+
+    This holds iff each candidate interval fully contains some stratum, i.e.
+    ``ceil(j*n/k) + 1 <= (j+1)*n/k`` for all ``j``.
+    """
+    n, k = n_samples, n_candidates
+    return all((-(-j * n // k) + 1) * k <= (j + 1) * n for j in range(k))
+
+
+__all__ = ["QRS", "PossibleValues", "SampleGenerator"]
