@@ -4,14 +4,17 @@ from unittest.mock import patch
 
 import numpy as np
 import torch
-from amplify import FixstarsClient, Poly
+from amplify import FixstarsClient, Poly, less_equal
 from amplify_bbopt import (
+    BinaryVariable,
     Dataset,
     DiscretizationSpec,
     EncodingMethod,
+    Optimizer,
     RealVariable,
     blackbox,
 )
+from amplify_bbopt.blackbox import BlackBoxFuncBase
 from amplify_bbopt.encoder import encode_input
 from amplify_bbopt.trainer import TorchFM
 
@@ -213,48 +216,60 @@ class _FakeAmplifyModel:
         return list(_FakeAmplifyModel.solutions), None
 
 
+def _real_variables(
+    method: EncodingMethod, num_bins: int, bounds: list[tuple[float, float]]
+) -> list[RealVariable]:
+    return [
+        RealVariable(
+            bounds=b,
+            encoding=method,
+            discretization_spec=DiscretizationSpec(num_bins=num_bins),
+        )
+        for b in bounds
+    ]
+
+
+def _make_blackbox(variables: list) -> BlackBoxFuncBase:
+    @blackbox
+    def bb_func(x: list[float] = variables) -> float:  # type: ignore
+        return float(np.sum(x))
+
+    return bb_func
+
+
 class EncodingSwitchConsistencyTest(unittest.TestCase):
     """FM の学習時エンコーディングは amplify_bbopt の変数定義に従う．"""
 
-    num_variables, num_bins, lower, upper = 2, 4, -1.0, 1.0
+    # 変数ごとに範囲が異なっても，復号は amplify_bbopt の変数定義に従う
+    num_bins, bounds = 4, [(-1.0, 1.0), (0.0, 3.0)]
 
-    def _optimizer(self, training_method: EncodingMethod, encoding: str):
-        variables = [
-            RealVariable(
-                bounds=(self.lower, self.upper),
-                encoding=training_method,
-                discretization_spec=DiscretizationSpec(num_bins=self.num_bins),
-            )
-            for _ in range(self.num_variables)
-        ]
-
-        @blackbox
-        def bb_func(x: list[float] = variables) -> float:  # type: ignore
-            return float(np.sum(x))
-
-        grid = np.linspace(self.lower, self.upper, self.num_bins)
-        data_x = np.array([[grid[0], grid[1]], [grid[2], grid[3]]])
+    def _optimizer(
+        self, training_method: EncodingMethod, search_method: EncodingMethod
+    ):
+        variables = _real_variables(training_method, self.num_bins, self.bounds)
+        data_x = np.array([[-1.0, 0.0], [1.0, 3.0]])
         trainer = BasicFMTrainer()
         num_inputs = len(encode_input(data_x[0], variables))
         torch.manual_seed(0)
         trainer._fm = TorchFM(num_inputs, 3)
         optimizer = EncodingSwitchOptimizer(
-            blackbox=bb_func,
-            trainer=trainer,
-            client=FixstarsClient(),
+            _make_blackbox(variables),
+            trainer,
+            FixstarsClient(),
             training_data=Dataset(data_x, np.zeros(len(data_x))),
-            N=self.num_variables,
-            L=self.lower,
-            M=self.upper,
-            q=self.num_bins,
-            encoding=encoding,
+            search_encoding=search_method,
         )
         return optimizer, variables, _fm_qubo(trainer)
 
     def _assert_consistent(
-        self, training_method: EncodingMethod, encoding: str, search_states: np.ndarray
+        self,
+        training_method: EncodingMethod,
+        search_method: EncodingMethod,
+        search_states: np.ndarray,
     ) -> None:
-        optimizer, variables, training_qubo = self._optimizer(training_method, encoding)
+        optimizer, variables, training_qubo = self._optimizer(
+            training_method, search_method
+        )
         _FakeAmplifyModel.solutions = list(search_states)
         with patch("amplify_bbopt_ext.qubo_conversion.AmplifyModel", _FakeAmplifyModel):
             solutions, _ = optimizer.minimize_surrogate()
@@ -274,21 +289,98 @@ class EncodingSwitchConsistencyTest(unittest.TestCase):
             offsets.append(search_energy - fm_energy)
         self.assertAlmostEqual(float(np.ptp(offsets)), 0.0, places=8)
 
-    def _all_states(self) -> np.ndarray:
-        grid = np.linspace(self.lower, self.upper, self.num_bins)
-        return np.array(list(product(grid, repeat=self.num_variables)))
+    def _all_levels(self) -> np.ndarray:
+        """全ての離散状態を，各変数の格子点の番号で返す．"""
+        levels = range(self.num_bins)
+        return np.array(list(product(levels, repeat=len(self.bounds))), dtype=float)
+
+    def _encode_levels(self, encode) -> np.ndarray:
+        return encode(
+            len(self.bounds), 0, self.num_bins - 1, self.num_bins, self._all_levels()
+        )
 
     def test_one_hot_training_domain_wall_search(self) -> None:
-        states = X_Real_to_Dw(
-            self.num_variables, self.lower, self.upper, self.num_bins, self._all_states()
+        self._assert_consistent(
+            EncodingMethod.OneHot,
+            EncodingMethod.DomainWall,
+            self._encode_levels(X_Real_to_Dw),
         )
-        self._assert_consistent(EncodingMethod.OneHot, "OhDw", states)
 
     def test_domain_wall_training_one_hot_search(self) -> None:
-        states = X_Real_to_Oh(
-            self.num_variables, self.lower, self.upper, self.num_bins, self._all_states()
+        self._assert_consistent(
+            EncodingMethod.DomainWall,
+            EncodingMethod.OneHot,
+            self._encode_levels(X_Real_to_Oh),
         )
-        self._assert_consistent(EncodingMethod.DomainWall, "DwOh", states)
+
+
+class EncodingSwitchOptimizerInitTest(unittest.TestCase):
+    def _make(self, variables: list, **kwargs) -> EncodingSwitchOptimizer:
+        kwargs.setdefault("search_encoding", EncodingMethod.DomainWall)
+        return EncodingSwitchOptimizer(
+            _make_blackbox(variables), BasicFMTrainer(), FixstarsClient(), **kwargs
+        )
+
+    def test_derives_block_structure_from_blackbox(self) -> None:
+        optimizer = self._make(
+            _real_variables(EncodingMethod.OneHot, 5, [(0.0, 1.0)] * 3)
+        )
+
+        self.assertEqual(optimizer._training_encoding, EncodingMethod.OneHot)
+        self.assertEqual(optimizer._N, 3)
+        self.assertEqual(optimizer._q, 5)
+
+    def test_rejects_mixed_encodings(self) -> None:
+        variables = _real_variables(EncodingMethod.OneHot, 5, [(0.0, 1.0)])
+        variables += _real_variables(EncodingMethod.DomainWall, 5, [(0.0, 1.0)])
+
+        with self.assertRaises(ValueError):
+            self._make(variables)
+
+    def test_rejects_different_num_bins(self) -> None:
+        variables = _real_variables(EncodingMethod.OneHot, 5, [(0.0, 1.0)])
+        variables += _real_variables(EncodingMethod.OneHot, 4, [(0.0, 1.0)])
+
+        with self.assertRaises(ValueError):
+            self._make(variables)
+
+    def test_rejects_binary_variables(self) -> None:
+        with self.assertRaises(ValueError):
+            self._make([BinaryVariable() for _ in range(3)])
+
+    def test_rejects_amplify_search_encoding(self) -> None:
+        variables = _real_variables(EncodingMethod.OneHot, 5, [(0.0, 1.0)])
+
+        with self.assertRaises(ValueError):
+            self._make(variables, search_encoding=EncodingMethod.Amplify)
+
+    def test_rejects_non_positive_penalty(self) -> None:
+        variables = _real_variables(EncodingMethod.OneHot, 5, [(0.0, 1.0)])
+
+        with self.assertRaises(ValueError):
+            self._make(variables, encoding_penalty=0.0)
+
+    def test_rejects_constraints_when_switching(self) -> None:
+        variables = _real_variables(EncodingMethod.OneHot, 5, [(0.0, 1.0)] * 2)
+        constraint = less_equal(variables[0].to_poly() + variables[1].to_poly(), 1.0)
+
+        with self.assertRaises(ValueError):
+            self._make(variables, constraints=constraint)
+        # 切り替えない場合は amplify_bbopt の通常の扱いに任せる
+        self._make(
+            variables, search_encoding=EncodingMethod.OneHot, constraints=constraint
+        )
+
+    def test_same_encoding_delegates_to_optimizer(self) -> None:
+        variables = _real_variables(EncodingMethod.OneHot, 5, [(0.0, 1.0)])
+        optimizer = self._make(variables, search_encoding=EncodingMethod.OneHot)
+
+        with patch.object(
+            Optimizer, "minimize_surrogate", return_value=([], None)
+        ) as base:
+            optimizer.minimize_surrogate(3)
+
+        base.assert_called_once_with(3)
 
 
 if __name__ == "__main__":

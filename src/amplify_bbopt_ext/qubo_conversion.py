@@ -13,6 +13,8 @@ from amplify_bbopt import (
     blackbox,
 )
 from amplify_bbopt.amplify_model import AmplifyModel
+from amplify_bbopt.blackbox import BlackBoxFuncBase
+from amplify_bbopt.encoder import decode_values
 from amplify_bbopt.optimizer import FlattenedSolution
 from amplify_bbopt.trainer import Dataset
 from amplify_bbopt.bbopt_logging import AMPLIFY_BBOPT_LOGGER_NAME
@@ -622,32 +624,67 @@ def _complement_qubo(qubo: np.ndarray) -> tuple[np.ndarray, float]:
     return off_diagonal - np.diag(linear), float(qubo.sum())
 
 
+_SWITCHABLE_ENCODINGS = (EncodingMethod.OneHot, EncodingMethod.DomainWall)
+
+
+def _block_structure(blackbox: BlackBoxFuncBase) -> tuple[EncodingMethod, int, int]:
+    """QUBO変換が前提とする (学習時エンコーディング, 変数の数, 分割数) を返す。"""
+    encodings = [var.encoding for var in blackbox.flattened_variables_dict.values()]
+    methods = {getattr(encoding, "method", None) for encoding in encodings}
+    num_bins = {getattr(encoding, "num_bins", None) for encoding in encodings}
+    if len(methods) != 1 or not methods <= set(_SWITCHABLE_ENCODINGS):
+        raise ValueError(
+            "All variables must share the OneHot or DomainWall encoding"
+        )
+    if len(num_bins) != 1:
+        raise ValueError("All variables must have the same number of bins")
+    return methods.pop(), len(encodings), num_bins.pop()  # pyright: ignore[reportReturnType]
+
+
 class EncodingSwitchOptimizer(Optimizer):
-    """FMの学習時とアニーリング時でエンコーディングを切り替える最適化器。"""
+    """FMの学習時とアニーリング時でエンコーディングを切り替える最適化器。
+
+    学習時のエンコーディングと分割数はブラックボックス関数の変数定義から決まる。
+    """
 
     def __init__(
         self,
-        *args,
-        N: int,
-        L: float,
-        M: float,
-        q: int,
-        encoding: str,
+        blackbox: BlackBoxFuncBase,
+        trainer,
+        client,
+        *,
+        search_encoding: EncodingMethod,
         encoding_penalty: float = 1000.0,
-        **kwargs,
+        training_data: Dataset | None = None,
+        constraints: amplify.Constraint | amplify.ConstraintList | None = None,
+        seed: int = 0,
     ) -> None:
-        super().__init__(*args, **kwargs)
+        if search_encoding not in _SWITCHABLE_ENCODINGS:
+            raise ValueError("search_encoding must be OneHot or DomainWall")
+        if encoding_penalty <= 0:
+            raise ValueError("encoding_penalty must be positive")
+        training_encoding, N, q = _block_structure(blackbox)
+        # 探索用モデルは元の変数を持たないため，ユーザー定義の制約を移せない
+        if search_encoding != training_encoding and constraints is not None:
+            raise ValueError("Constraints are not supported when switching encodings")
+        super().__init__(
+            blackbox,
+            trainer,
+            client,
+            training_data=training_data,
+            constraints=constraints,
+            seed=seed,
+        )
         self._N = N
-        self._L = L
-        self._M = M
         self._q = q
-        self._encoding = encoding
+        self._training_encoding = training_encoding
+        self._search_encoding = search_encoding
         self._encoding_penalty = encoding_penalty
 
     def minimize_surrogate(
         self, max_retries: int = 10
     ) -> tuple[list[FlattenedSolution], amplify.Result]:
-        if self._encoding not in {"OhDw", "DwOh"}:
+        if self._search_encoding == self._training_encoding:
             return super().minimize_surrogate(max_retries)
 
         trainer = self.surrogate_model.trainer
@@ -657,7 +694,7 @@ class EncodingSwitchOptimizer(Optimizer):
             )
 
         training_qubo = _fm_qubo(trainer)
-        if self._encoding == "OhDw":
+        if self._training_encoding == EncodingMethod.OneHot:
             logger.info(
                 "Converting QUBO encoding: Oh -> Dw (N=%d, q=%d)",
                 self._N,
@@ -723,26 +760,19 @@ class EncodingSwitchOptimizer(Optimizer):
             ):
                 continue
 
-            if self._encoding == "OhDw":
+            if self._training_encoding == EncodingMethod.OneHot:
                 surrogate_solution = X_Dw_to_Oh(
                     self._N, self._q, search_solution
                 )
             else:
-                surrogate_solution = X_Oh_to_Dw(
+                # 学習データと同じ amplify_bbopt の Domain-wall 規約に戻す
+                surrogate_solution = 1 - X_Oh_to_Dw(
                     self._N, self._q, search_solution
                 )
 
-            blackbox_solution = X_Any_to_Real(
-                self._N,
-                self._L,
-                self._M,
-                self._q,
-                surrogate_solution,
-                self._encoding,
+            blackbox_solution = decode_values(
+                self.encoding_info, surrogate_solution
             )
-            if self._encoding == "DwOh":
-                # 学習データと同じ amplify_bbopt の Domain-wall 規約に戻す
-                surrogate_solution = 1 - surrogate_solution
             solutions.append(
                 FlattenedSolution(
                     np.asarray(blackbox_solution, dtype=float),
@@ -857,19 +887,28 @@ def run(
     trainer.lr_scheduler_params = lr_scheduler_params or {}
     trainer.num_factors = k
 
-    optimizer = EncodingSwitchOptimizer(
-        blackbox=optimization_blackbox,
-        trainer=trainer,
-        client=client,
-        training_data=Dataset(dataset_x, dataset_y),
-        seed=seed,
-        N=N,
-        L=L,
-        M=M,
-        q=q,
-        encoding=encoding,
-        encoding_penalty=encoding_penalty,
-    )
+    if encoding == "Bi":
+        optimizer = Optimizer(
+            blackbox=optimization_blackbox,
+            trainer=trainer,
+            client=client,
+            training_data=Dataset(dataset_x, dataset_y),
+            seed=seed,
+        )
+    else:
+        optimizer = EncodingSwitchOptimizer(
+            blackbox=optimization_blackbox,
+            trainer=trainer,
+            client=client,
+            training_data=Dataset(dataset_x, dataset_y),
+            seed=seed,
+            search_encoding=(
+                EncodingMethod.DomainWall
+                if encoding in {"Dw", "OhDw"}
+                else EncodingMethod.OneHot
+            ),
+            encoding_penalty=encoding_penalty,
+        )
     optimizer.optimize(
         n_iter,
         max_deduplication_trials=max_deduplication_trials,
