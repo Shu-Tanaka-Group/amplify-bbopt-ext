@@ -93,7 +93,7 @@ class LatestDatasetOptimizer(Optimizer):
 
 class BasicFMTrainer(FMTrainer):
     def __init__(self, num_threads: int | None = 8) -> None:
-        super().__init__()
+        super().__init__(num_threads)
 
     def train(self, dataset: amplify_bbopt.Dataset) -> None:
         input_dataset_dim = 2

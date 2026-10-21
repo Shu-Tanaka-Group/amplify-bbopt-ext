@@ -1,8 +1,9 @@
 import unittest
 
 import numpy as np
+import torch
 
-from amplify_bbopt_ext.training import LatestDataset
+from amplify_bbopt_ext.training import BasicFMTrainer, LatestDataset
 
 
 def _make_data(n: int, num_variables: int = 3) -> tuple[np.ndarray, np.ndarray]:
@@ -111,6 +112,25 @@ class LatestDatasetAppendTest(unittest.TestCase):
         dataset = LatestDataset(x, y, size_limit=5)
         with self.assertRaises(ValueError):
             dataset.append(np.zeros((2, 3)), 1.0)
+
+
+class BasicFMTrainerInitTest(unittest.TestCase):
+    def setUp(self) -> None:
+        # torch のスレッド数はプロセス全体の設定なので，他のテストに影響しないよう戻す
+        num_threads = torch.get_num_threads()
+        self.addCleanup(torch.set_num_threads, num_threads)
+
+    def test_sets_num_threads(self) -> None:
+        BasicFMTrainer(num_threads=2)
+
+        self.assertEqual(torch.get_num_threads(), 2)
+
+    def test_none_keeps_num_threads(self) -> None:
+        torch.set_num_threads(3)
+
+        BasicFMTrainer(num_threads=None)
+
+        self.assertEqual(torch.get_num_threads(), 3)
 
 
 if __name__ == "__main__":

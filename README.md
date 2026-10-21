@@ -35,10 +35,11 @@ from amplify_bbopt import (
 )
 from amplify import FixstarsClient
 from amplify_bbopt_ext.initial_sampling import UniformRandom
-from amplify_bbopt_ext.runner import run
+from amplify_bbopt_ext.runner import latest_optimizer, run
 from amplify_bbopt_ext.utils import plot_optimization_history
 
 from datetime import timedelta
+from functools import partial
 import numpy as np
 
 
@@ -112,13 +113,13 @@ lr_scheduler_class = None
 result = run(
     client,
     func,
-    size_limit,
-    K,
     n_iter,
     initial_samples,
-    epochs,
-    optimizer_params,
-    lr_scheduler_class,
+    num_factors=K,
+    epochs=epochs,
+    optimizer_params=optimizer_params,
+    lr_scheduler_class=lr_scheduler_class,
+    make_optimizer=partial(latest_optimizer, size_limit=size_limit),
 )
 
 ###############################################################################
