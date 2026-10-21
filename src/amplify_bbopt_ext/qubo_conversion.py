@@ -615,6 +615,13 @@ def _domain_wall_penalty(N: int, q: int, weight: float) -> np.ndarray:
     return penalty
 
 
+def _complement_qubo(qubo: np.ndarray) -> tuple[np.ndarray, float]:
+    """上三角QUBO y^T Q y を，y = 1 - z の置換で z^T Q' z + 定数 に書き換える。"""
+    off_diagonal = np.triu(qubo, 1)
+    linear = np.diag(qubo) + off_diagonal.sum(axis=0) + off_diagonal.sum(axis=1)
+    return off_diagonal - np.diag(linear), float(qubo.sum())
+
+
 class EncodingSwitchOptimizer(Optimizer):
     """FMの学習時とアニーリング時でエンコーディングを切り替える最適化器。"""
 
@@ -680,6 +687,9 @@ class EncodingSwitchOptimizer(Optimizer):
                 self._N,
                 self._q,
             )
+            # amplify_bbopt の Domain-wall は本モジュールの規約のビット反転なので，
+            # 学習済みQUBOを本モジュールの規約に揃えてから変換する（定数項は探索に不要）
+            training_qubo, _ = _complement_qubo(training_qubo)
             converted_qubo = QUBO_Dw_to_Oh(
                 self._N, self._q, training_qubo
             )
@@ -730,6 +740,9 @@ class EncodingSwitchOptimizer(Optimizer):
                 surrogate_solution,
                 self._encoding,
             )
+            if self._encoding == "DwOh":
+                # 学習データと同じ amplify_bbopt の Domain-wall 規約に戻す
+                surrogate_solution = 1 - surrogate_solution
             solutions.append(
                 FlattenedSolution(
                     np.asarray(blackbox_solution, dtype=float),
