@@ -95,6 +95,7 @@ def run(
     lr_scheduler_params: dict | None = None,
     num_threads: int | None = None,
     make_optimizer: OptimizerFactory = plain_optimizer,
+    max_deduplication_trials: int | None = None,
 ) -> Optimizer:
     # BasicFMTrainer の None（スレッド数を変更しない）とは異なり，None は CPU 数を意味する
     trainer = fm_trainer(
@@ -108,5 +109,5 @@ def run(
     dataset_x = np.asarray(initial_data)
     dataset_y = np.array([bb_func(x) for x in dataset_x])
     optimizer = make_optimizer(bb_func, trainer, client, Dataset(dataset_x, dataset_y))
-    optimizer.optimize(n_iter)
+    optimizer.optimize(n_iter, max_deduplication_trials)
     return optimizer

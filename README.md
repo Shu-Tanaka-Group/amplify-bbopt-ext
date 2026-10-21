@@ -16,6 +16,7 @@ Fixstars Amplify BBOptに基づいた，ブラックボックス離散最適化�
 
 - [SWIFT-FMQA](./examples/fmqa_latest.ipynb)
 - [LHS/Sobol'-FMQA](./examples/lhs_sobol_fmqa.ipynb)
+- [エンコーディング切り替えFMQA](./examples/stage-dependent-encoding.ipynb)
 - （今後も追加予定）
 
 国立研究開発法人産業技術総合研究所量子・AI融合技術グローバル研究センター（G-QuAT）の保有する量子・古典融合計算基盤ABCI-Qのコンピューティングリソースを活用して，研究成果に基づく最適化手法を検証することができます．
