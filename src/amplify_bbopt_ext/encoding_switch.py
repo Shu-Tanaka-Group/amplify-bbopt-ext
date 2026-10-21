@@ -1,27 +1,17 @@
-from collections.abc import Callable
-from functools import partial
 from itertools import product
 from logging import getLogger
 
 import amplify
 import numpy as np
 from amplify import BaseClient
-from amplify_bbopt import (
-    DiscretizationSpec,
-    EncodingMethod,
-    Optimizer,
-    RealVariable,
-    blackbox,
-)
+from amplify_bbopt import EncodingMethod, Optimizer
 from amplify_bbopt.amplify_model import AmplifyModel
 from amplify_bbopt.blackbox import BlackBoxFuncBase
 from amplify_bbopt.encoder import decode_values
 from amplify_bbopt.optimizer import FlattenedSolution
 from amplify_bbopt.trainer import Dataset, Trainer
 from amplify_bbopt.bbopt_logging import AMPLIFY_BBOPT_LOGGER_NAME
-from torch.optim.lr_scheduler import LRScheduler
 
-from . import runner
 from .training import BasicFMTrainer
 
 logger = getLogger(AMPLIFY_BBOPT_LOGGER_NAME)
@@ -579,107 +569,4 @@ def encoding_switch_optimizer(
         search_encoding=search_encoding,
         encoding_penalty=encoding_penalty,
         training_data=dataset,
-    )
-
-
-# 文字列で指定するエンコーディング方式と（学習時，探索時）のエンコーディングの対応
-_ENCODINGS = {
-    "Oh": (EncodingMethod.OneHot, EncodingMethod.OneHot),
-    "Dw": (EncodingMethod.DomainWall, EncodingMethod.DomainWall),
-    "OhDw": (EncodingMethod.OneHot, EncodingMethod.DomainWall),
-    "DwOh": (EncodingMethod.DomainWall, EncodingMethod.OneHot),
-}
-
-
-def _discretized_blackbox(
-    bb_func: Callable[[np.ndarray], float],
-    N: int,
-    L: float,
-    M: float,
-    q: int,
-    encoding: EncodingMethod,
-) -> BlackBoxFuncBase:
-    """[L, M] を q 点に離散化した N 個の実数変数を入力とするブラックボックス関数を作る。"""
-
-    @blackbox
-    def discretized_blackbox(
-        x: list[float] = [  # pyright: ignore[reportArgumentType]
-            RealVariable(
-                bounds=(L, M),
-                encoding=encoding,
-                discretization_spec=DiscretizationSpec(num_bins=q),
-            )
-            for _ in range(N)
-        ],
-    ) -> float:
-        return float(bb_func(np.asarray(x, dtype=float)))
-
-    return discretized_blackbox
-
-
-def run(
-    client: BaseClient,
-    bb_func: Callable[[np.ndarray], float],
-    n_iter: int,
-    initial_data: np.ndarray,
-    *,
-    N: int,
-    q: int,
-    L: float,
-    M: float,
-    encoding: str,
-    num_factors: int,
-    epochs: int,
-    optimizer_params: dict,
-    lr_scheduler_class: type[LRScheduler] | None = None,
-    lr_scheduler_params: dict | None = None,
-    num_threads: int | None = None,
-    encoding_penalty: float = 1000.0,
-    max_deduplication_trials: int | None = None,
-) -> Optimizer:
-    """指定されたエンコーディング方式でFMQAを実行する。
-
-    initial_data は実数値の (データ数, N) 配列で与える。
-    """
-
-    if encoding not in _ENCODINGS:
-        raise ValueError(
-            f"encodingには{sorted(_ENCODINGS)}のいずれかを指定してください。"
-            f"指定された値: {encoding!r}"
-        )
-    if N <= 0 or q <= 1:
-        raise ValueError("Nには1以上、qには2以上の整数を指定してください。")
-    if L >= M:
-        raise ValueError("探索範囲の下限Lは上限Mより小さくしてください。")
-    # ブラックボックス関数を評価する前に引数の誤りを検出する
-    if encoding_penalty <= 0:
-        raise ValueError("encoding_penaltyには正の値を指定してください。")
-    if max_deduplication_trials is not None and max_deduplication_trials < 0:
-        raise ValueError(
-            "max_deduplication_trialsには0以上の整数またはNoneを"
-            "指定してください。"
-        )
-
-    data = np.asarray(initial_data, dtype=float)
-    if data.ndim != 2 or data.shape[1] != N:
-        raise ValueError(f"initial_dataは列数{N}の2次元配列にしてください。")
-
-    training_encoding, search_encoding = _ENCODINGS[encoding]
-    return runner.run(
-        client,
-        _discretized_blackbox(bb_func, N, L, M, q, training_encoding),
-        n_iter,
-        data,
-        num_factors=num_factors,
-        epochs=epochs,
-        optimizer_params=optimizer_params,
-        lr_scheduler_class=lr_scheduler_class,
-        lr_scheduler_params=lr_scheduler_params,
-        num_threads=num_threads,
-        make_optimizer=partial(
-            encoding_switch_optimizer,
-            search_encoding=search_encoding,
-            encoding_penalty=encoding_penalty,
-        ),
-        max_deduplication_trials=max_deduplication_trials,
     )
