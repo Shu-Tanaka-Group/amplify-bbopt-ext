@@ -41,9 +41,11 @@ class _StubOptimizer:
         self.client = client
         self.dataset = dataset
         self.n_iter: int | None = None
+        self.max_deduplication_trials: int | None = None
 
-    def optimize(self, n_iter: int) -> None:
+    def optimize(self, n_iter: int, max_deduplication_trials: int | None) -> None:
         self.n_iter = n_iter
+        self.max_deduplication_trials = max_deduplication_trials
 
 
 class FmTrainerTest(unittest.TestCase):
@@ -192,6 +194,12 @@ class RunTest(unittest.TestCase):
         np.testing.assert_array_equal(result.dataset.x, _initial_data)
         np.testing.assert_array_equal(result.dataset.y, [1.0, 2.0, 3.0])
         self.assertEqual(result.n_iter, 5)
+        self.assertIsNone(result.max_deduplication_trials)
+
+    def test_passes_max_deduplication_trials(self) -> None:
+        result = self._run(max_deduplication_trials=7)
+
+        self.assertEqual(result.max_deduplication_trials, 7)
 
     def test_invalid_params_fail_before_evaluating_blackbox(self) -> None:
         calls = []
