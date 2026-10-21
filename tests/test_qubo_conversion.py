@@ -1,4 +1,6 @@
+import pickle
 import unittest
+from functools import partial
 from itertools import product
 from unittest.mock import patch
 
@@ -24,6 +26,7 @@ from amplify_bbopt_ext.qubo_conversion import (
     QUBO_Oh_to_Dw,
     _fm_qubo,
     _verify_qubo_conversion,
+    encoding_switch_optimizer,
     X_Real_to_Dw,
     X_Real_to_Oh,
     run,
@@ -381,6 +384,40 @@ class EncodingSwitchOptimizerInitTest(unittest.TestCase):
             optimizer.minimize_surrogate(3)
 
         base.assert_called_once_with(3)
+
+
+class EncodingSwitchOptimizerFactoryTest(unittest.TestCase):
+    def test_builds_optimizer_with_dataset(self) -> None:
+        variables = _real_variables(EncodingMethod.OneHot, 3, [(0.0, 1.0)] * 2)
+        data_x = np.array([[0.0, 0.5], [1.0, 1.0]])
+        make_optimizer = partial(
+            encoding_switch_optimizer,
+            search_encoding=EncodingMethod.DomainWall,
+            encoding_penalty=10.0,
+        )
+
+        optimizer = make_optimizer(
+            _make_blackbox(variables),
+            BasicFMTrainer(),
+            FixstarsClient(),
+            Dataset(data_x, np.array([1.0, 2.0])),
+        )
+
+        self.assertIsInstance(optimizer, EncodingSwitchOptimizer)
+        self.assertEqual(optimizer._search_encoding, EncodingMethod.DomainWall)
+        self.assertEqual(optimizer._encoding_penalty, 10.0)
+        np.testing.assert_array_equal(optimizer.training_data.x, data_x)
+
+    def test_partial_is_picklable(self) -> None:
+        make_optimizer = partial(
+            encoding_switch_optimizer, search_encoding=EncodingMethod.DomainWall
+        )
+
+        restored = pickle.loads(pickle.dumps(make_optimizer))
+
+        self.assertEqual(
+            restored.keywords, {"search_encoding": EncodingMethod.DomainWall}
+        )
 
 
 if __name__ == "__main__":

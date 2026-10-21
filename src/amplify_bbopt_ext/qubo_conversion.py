@@ -4,6 +4,7 @@ from logging import getLogger
 
 import amplify
 import numpy as np
+from amplify import BaseClient
 from amplify_bbopt import (
     BinaryVariable,
     DiscretizationSpec,
@@ -16,7 +17,7 @@ from amplify_bbopt.amplify_model import AmplifyModel
 from amplify_bbopt.blackbox import BlackBoxFuncBase
 from amplify_bbopt.encoder import decode_values
 from amplify_bbopt.optimizer import FlattenedSolution
-from amplify_bbopt.trainer import Dataset
+from amplify_bbopt.trainer import Dataset, Trainer
 from amplify_bbopt.bbopt_logging import AMPLIFY_BBOPT_LOGGER_NAME
 
 from .training import BasicFMTrainer
@@ -782,6 +783,25 @@ class EncodingSwitchOptimizer(Optimizer):
             )
 
         return solutions, amplify_result
+
+
+def encoding_switch_optimizer(
+    blackbox: BlackBoxFuncBase,
+    trainer: Trainer,
+    client: BaseClient,
+    dataset: Dataset,
+    *,
+    search_encoding: EncodingMethod,
+    encoding_penalty: float = 1000.0,
+) -> EncodingSwitchOptimizer:
+    return EncodingSwitchOptimizer(
+        blackbox,
+        trainer,
+        client,
+        search_encoding=search_encoding,
+        encoding_penalty=encoding_penalty,
+        training_data=dataset,
+    )
 
 
 def run(
