@@ -34,9 +34,12 @@ from amplify_bbopt import (
     blackbox,
 )
 from amplify import FixstarsClient
-from amplify_bbopt_ext.runner import run
+from amplify_bbopt_ext.initial_sampling import UniformRandom
+from amplify_bbopt_ext.runner import latest_optimizer, run
+from amplify_bbopt_ext.utils import plot_optimization_history
 
 from datetime import timedelta
+from functools import partial
 import numpy as np
 
 
@@ -61,7 +64,6 @@ def rastrigin_function(x: list[float]) -> float:
 
 
 # 問題・条件設定
-rng = np.random.default_rng()
 num_vars = 5  # 問題次元 (実数決定変数数)
 var_min = -3.0  # 実数決定変数の最小値
 var_max = 3.0  # 実数決定変数の最大値
@@ -78,6 +80,15 @@ x_list = [
 @blackbox
 def func(input_x: list[float] = x_list) -> float:  # type: ignore
     return rastrigin_function(input_x)
+
+###############################################################################
+# 初期学習データの生成
+###############################################################################
+n_init_data = 10  # 初期学習データ数
+seed = None  # 初期学習データを生成する際のシード値．Noneの場合は実行ごとに異なる乱数が生成される．
+
+# 各変数の取りうる値（離散化された実数値）から一様ランダムに初期学習データを生成する
+initial_samples = UniformRandom.from_blackbox(func, seed=seed).generate(n_init_data)
 
 ###############################################################################
 # 最適化の実行
@@ -97,58 +108,25 @@ n_iter = 200
 epochs = 1000
 optimizer_params = {"lr": 0.01}
 lr_scheduler_class = None
-seed = None
 
 # 結果を取得
 result = run(
     client,
     func,
-    size_limit,
-    K,
     n_iter,
     initial_samples,
-    epochs,
-    optimizer_params,
-    lr_scheduler_class,
+    num_factors=K,
+    epochs=epochs,
+    optimizer_params=optimizer_params,
+    lr_scheduler_class=lr_scheduler_class,
+    make_optimizer=partial(latest_optimizer, size_limit=size_limit),
 )
 
 ###############################################################################
 # 結果の可視化
 ###############################################################################
-import matplotlib.pyplot as plt
-import numpy as np
+plot_optimization_history(result, n_init_data)
 
-# 最適化履歴からこれまでの最小値（Best Objective Value）の推移を計算
-y_history = result.training_data.y
-best_y = np.minimum.accumulate(y_history)
-
-fig, ax = plt.subplots(figsize=(10, 6))
-n_initial = len(initial_samples)
-
-# 評価回数（x軸）は 1 からスタート
-x_evals = np.arange(1, len(best_y) + 1)
-
-# 全サンプリング点の散布図
-ax.scatter(x_evals, y_history, color='tab:blue', alpha=0.3, label='Sampled Points', s=20)
-
-# これまでの最小値の推移の折れ線
-ax.plot(x_evals, best_y, linestyle='-', color='tab:red', label='Best Objective Value')
-
-# フェーズの境界線
-ax.axvline(x=n_initial, color='k', linestyle='--', alpha=0.5, label='End of Initial Data')
-
-# 背景を色分けしてフェーズを区別
-ax.axvspan(0, n_initial, alpha=0.1, color='gray', label='Initial Sampling Phase')
-ax.axvspan(n_initial, len(best_y) + 1, alpha=0.05, color='green', label='FMQA Optimization Phase')
-
-ax.set_xlabel('Number of evaluations', fontsize=16)
-ax.set_ylabel('Objective value', fontsize=16)
-ax.set_title('Optimization History on Rastrigin function', fontsize=18)
-ax.legend(fontsize=12)
-ax.tick_params(axis='both', which='major', labelsize=14)
-ax.grid(True, linestyle=':', alpha=0.7)
-plt.tight_layout()
-plt.show()
 ```
 
 ## インストール

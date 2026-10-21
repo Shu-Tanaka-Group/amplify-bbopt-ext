@@ -1,6 +1,6 @@
 from amplify_bbopt import Optimizer
 
-from .utils import BasicFMTrainer
+from .runner import fm_trainer
 
 
 def single_run(
@@ -12,15 +12,13 @@ def single_run(
     epochs,
     optimizer_params,
     lr_scheduler_class=None,
+    lr_scheduler_params=None,
 ):
-    my_trainer = BasicFMTrainer()
-    my_trainer.epochs = epochs
-    my_trainer.optimizer_params = optimizer_params
-    my_trainer.lr_scheduler_class = lr_scheduler_class
-    my_trainer.num_factors = k
     optimizer = Optimizer(
         blackbox=bb_func,
-        trainer=my_trainer,
+        trainer=fm_trainer(
+            k, epochs, optimizer_params, lr_scheduler_class, lr_scheduler_params
+        ),
         client=client,
     )
     optimizer.add_random_training_data(num_data=n_init_data)

@@ -1,10 +1,18 @@
 import numpy as np
-from amplify_bbopt import Optimizer
-from amplify_bbopt.encoder import encode_input
-from amplify_bbopt.trainer import Dataset
-from numpy.typing import NDArray
 
-from .utils import BasicFMTrainer
+import amplify_bbopt
+from amplify_bbopt import Optimizer, FMTrainer
+from amplify_bbopt.encoder import encode_input
+from amplify_bbopt.trainer import Dataset, TorchFM
+from amplify_bbopt.bbopt_logging import AMPLIFY_BBOPT_LOGGER_NAME
+
+import torch
+from numpy.typing import NDArray
+from logging import getLogger
+
+
+
+logger = getLogger(AMPLIFY_BBOPT_LOGGER_NAME)
 
 
 class LatestDataset(Dataset):
@@ -83,3 +91,50 @@ class LatestDatasetOptimizer(Optimizer):
             )
 
 
+class BasicFMTrainer(FMTrainer):
+    def __init__(self, num_threads: int | None = 8) -> None:
+        super().__init__(num_threads)
+
+    def train(self, dataset: amplify_bbopt.Dataset) -> None:
+        input_dataset_dim = 2
+
+        if len(dataset.x) == 0 or len(dataset.y) == 0:
+            raise ValueError("The dataset must not be empty.")
+        if len(dataset.x) != len(dataset.y):
+            raise ValueError(
+                "The number of input values and output values must be the same."
+            )
+        if len(dataset.x.shape) != input_dataset_dim:
+            raise ValueError("The input dataset must be 2D")
+
+        self._fm = TorchFM(dataset.x.shape[1], self._num_factors)
+
+        optimizer = self._optimizer(
+            [self._fm.quadratic, self._fm.linear, self._fm.bias],
+            **self._optimizer_params,
+        )
+        criterion = self._loss()
+        scheduler = (
+            self._lr_scheduler(optimizer, **self._lr_scheduler_params)
+            if self._lr_scheduler is not None
+            else None
+        )
+        x_tensor, y_tensor = (
+            torch.from_numpy(dataset.x).float(),
+            torch.from_numpy(dataset.y).float(),
+        )
+        self._fm.train()
+        for _ in range(self._epochs):
+            optimizer.zero_grad()
+            out = self._fm(x_tensor)
+            loss = criterion(out, y_tensor)
+            loss.backward()
+            optimizer.step()
+            if scheduler is not None:
+                scheduler.step()
+        # display training loss
+        with torch.no_grad():
+            if logger is not None:
+                self._fm.eval()
+                loss = criterion(self._fm(x_tensor), y_tensor)
+                logger.info(f"training error: {loss.item():.3e}")
