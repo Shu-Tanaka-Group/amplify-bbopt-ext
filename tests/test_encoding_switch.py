@@ -21,7 +21,7 @@ from amplify_bbopt.blackbox import BlackBoxFuncBase
 from amplify_bbopt.encoder import encode_input
 from amplify_bbopt.trainer import TorchFM
 
-from amplify_bbopt_ext.qubo_conversion import (
+from amplify_bbopt_ext.encoding_switch import (
     EncodingSwitchOptimizer,
     QUBO_Dw_to_Oh,
     QUBO_Oh_to_Dw,
@@ -249,7 +249,7 @@ class EncodingSwitchConsistencyTest(unittest.TestCase):
             training_method, search_method
         )
         _FakeAmplifyModel.solutions = list(search_states)
-        with patch("amplify_bbopt_ext.qubo_conversion.AmplifyModel", _FakeAmplifyModel):
+        with patch("amplify_bbopt_ext.encoding_switch.AmplifyModel", _FakeAmplifyModel):
             solutions, _ = optimizer.minimize_surrogate()
 
         self.assertEqual(len(solutions), len(search_states))
