@@ -12,7 +12,7 @@ from amplify_bbopt import (
     blackbox,
 )
 
-from amplify_bbopt_ext.initial_sampling import QRS, _covers_all_candidates
+from amplify_bbopt_ext.initial_sampling import QRS, UniformRandom, _covers_all_candidates
 
 class ContinuousInitialSamplingTest(unittest.TestCase):
     def test_lhs_is_reproducible_and_scaled(self) -> None:
@@ -171,6 +171,71 @@ class BlackBoxTest(unittest.TestCase):
             for column, var in enumerate(variables):
                 one_hot = np.array([var.encoding.encode_value(value) for value in samples[:, column]])
                 np.testing.assert_array_equal(one_hot.sum(axis=0), np.ones(32))
+
+class UniformRandomTest(unittest.TestCase):
+    def test_is_reproducible_and_maps_domains(self) -> None:
+        possible_values = [(-2.0, 2.0), [0, 1], [0.5, 1.5, 2.5]]
+        first = UniformRandom(possible_values, seed=3).generate(50)
+        second = UniformRandom(possible_values, seed=3).generate(50)
+
+        np.testing.assert_array_equal(first, second)
+        self.assertEqual(first.shape, (50, 3))
+        self.assertEqual(first.dtype, np.float64)
+        self.assertTrue(np.all((first[:, 0] >= -2.0) & (first[:, 0] < 2.0)))
+        self.assertTrue(np.all(np.isin(first[:, 1], [0, 1])))
+        self.assertTrue(np.all(np.isin(first[:, 2], [0.5, 1.5, 2.5])))
+
+    def test_successive_calls_continue_stream(self) -> None:
+        possible_values = [(0.0, 1.0), [0, 1]]
+        sampler = UniformRandom(possible_values, seed=5)
+        first = sampler.generate(4)
+        second = sampler.generate(6)
+        whole = UniformRandom(possible_values, seed=5).generate(10)
+
+        np.testing.assert_array_equal(np.vstack([first, second]), whole)
+
+    def test_candidates_are_equally_likely(self) -> None:
+        samples = UniformRandom([[1, 2, 3, 4]], seed=0).generate(40000)
+        _, counts = np.unique(samples[:, 0], return_counts=True)
+
+        np.testing.assert_allclose(counts / 40000, 0.25, atol=0.01)
+
+    def test_does_not_warn_about_coverage(self) -> None:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            UniformRandom([[0, 1, 2]], seed=0).generate(1)
+
+    def test_validation(self) -> None:
+        with self.assertRaises(ValueError):
+            UniformRandom([])
+        with self.assertRaises(ValueError):
+            UniformRandom([(1.0, 0.0)])
+        with self.assertRaises(ValueError):
+            UniformRandom([(0.0, 1.0)]).generate(0)
+
+    def test_from_blackbox_follows_variable_order(self) -> None:
+        @blackbox
+        def bb_func(
+            x: float = RealVariable((-1.0, 1.0), encoding=EncodingMethod.Amplify),  # type: ignore
+            b: list[int] = [BinaryVariable(), BinaryVariable()],  # type: ignore  # noqa: B006
+        ) -> float:
+            return 0.0
+
+        samples = UniformRandom.from_blackbox(bb_func, seed=0).generate(20)
+
+        self.assertEqual(samples.shape, (20, 3))
+        self.assertTrue(np.all((samples[:, 0] >= -1.0) & (samples[:, 0] < 1.0)))
+        self.assertTrue(np.all(np.isin(samples[:, 1:], [0, 1])))
+
+class WarningLocationTest(unittest.TestCase):
+    def test_warnings_point_to_caller(self) -> None:
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            # Neither balanced (6 is not 2**m) nor covering all of 5 candidates.
+            QRS("sobol", [[0, 1, 2, 3, 4]], seed=0).generate(6)
+
+        self.assertEqual(len(caught), 2)
+        self.assertTrue(all(w.filename == __file__ for w in caught))
 
 if __name__ == "__main__":
     unittest.main()
