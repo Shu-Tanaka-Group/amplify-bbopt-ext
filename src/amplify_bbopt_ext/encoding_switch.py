@@ -57,60 +57,6 @@ d = 実数変数の分割数 : int
 """
 
 
-def generate_initial_samples(
-    N: int,
-    L: float,
-    M: float,
-    q: int,
-    n_samples: int,
-    encoding: str,
-    seed: int | None = None,
-):
-    """
-    Generate initial training samples.
-
-    Parameters
-    ----------
-    N : int
-        Number of continuous variables.
-    L, M : float
-        Lower and upper bounds.
-    q : int
-        Number of discretization points.
-    n_samples : int
-        Number of initial samples.
-    encoding : {"Oh", "Dw", "OhDw", "DwOh"}
-        Integer-binary encoding.
-    seed : int, optional
-
-    Returns
-    -------
-    X_real : ndarray, shape=(n_samples, N)
-        Continuous variables.
-    X_binary : ndarray
-        Encoded binary variables.
-    """
-
-    rng = np.random.default_rng(seed)
-
-    # q個の離散値
-    grid = np.linspace(L, M, q)
-
-    # 離散点からランダムサンプリング
-    X_real = grid[rng.integers(0, q, size=(n_samples, N))]
-
-    # エンコーディング
-    X_binary = X_Real_to_Any(
-        N,
-        L,
-        M,
-        q,
-        X_real,
-        encoding,
-    )
-
-    return X_real, X_binary
-    
 #エンコーディング制約を満たしているか確認．
 #制約を満たすときTrueを返す．
 def Decode_const_check(EncodingMode, N, d, x):
@@ -276,28 +222,6 @@ def X_Dw_to_Oh(N, d, X_Dw):
     else:
         raise ValueError("X_Dwは1次元または2次元の配列である必要があります。")
     return X_Oh
-
-def X_Real_to_Any(N, L, M, d, X_Real, EncodingMode):
-    if EncodingMode=="Oh" or EncodingMode=="OhDw":
-        X_Any = X_Real_to_Oh(N, L, M, d, X_Real)
-    elif EncodingMode=="Dw" or EncodingMode=="DwOh":
-        X_Any = X_Real_to_Dw(N, L, M, d, X_Real)
-    elif EncodingMode=="Real":
-        X_Any = X_Real
-    else:
-        raise ValueError(f"未対応のエンコーディング方式です: {EncodingMode}")
-    return X_Any
-
-def X_Any_to_Real(N, L, M, d, X_Any, EncodingMode): 
-    if EncodingMode=="Oh" or EncodingMode=="OhDw":
-        X_Real = X_Oh_to_Real(N, L, M, d, X_Any)
-    elif EncodingMode=="Dw" or EncodingMode=="DwOh":
-        X_Real = X_Dw_to_Real(N, L, M, d, X_Any)
-    elif EncodingMode=="Real":
-        X_Real = X_Any
-    else:
-        raise ValueError(f"未対応のエンコーディング方式です: {EncodingMode}")
-    return X_Real
 
 # 上三角行列のQUBO行列をone-hot表現からdomain-wall表現へ変換
 def QUBO_Oh_to_Dw(N, d, QUBO_Oh):       
