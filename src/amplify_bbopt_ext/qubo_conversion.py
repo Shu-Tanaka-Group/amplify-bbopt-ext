@@ -701,7 +701,7 @@ class EncodingSwitchOptimizer(Optimizer):
         generator = amplify.VariableGenerator()
         search_variables = generator.array("Binary", search_qubo.shape[0])
         search_model = AmplifyModel(search_variables, self.amplify_model.client)
-        search_model.objective = search_variables @ search_qubo @ search_variables
+        search_model.objective = search_variables @ search_qubo @ search_variables  # pyright: ignore[reportOperatorIssue, reportAttributeAccessIssue]
         search_solutions, amplify_result = search_model.solve(
             constraint_weight=1.0, max_retries=max_retries
         )
