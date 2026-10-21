@@ -1,4 +1,3 @@
-import math
 from itertools import product
 from logging import getLogger
 
@@ -6,7 +5,6 @@ import amplify
 import numpy as np
 from amplify import BaseClient
 from amplify_bbopt import (
-    BinaryVariable,
     DiscretizationSpec,
     EncodingMethod,
     Optimizer,
@@ -40,8 +38,7 @@ L=-1，M=1，d=5とすると，
 n_iを，
 One-hot表現にすると，一つの変数をd個のバイナリ変数に分解する．バイナリ変数の総数は Dd 個
 Domain-wall表現では，(d-1)個のバイナリ変数に分解する．バイナリ変数の総数は D(d-1) 個
-二進数表現では，ceil(log_2(d))個のバイナリ変数に分解する．バイナリ変数の総数は D×ceil(log_2(d)) 個
-Xを整数，Oh,Dw,Biに変換するコードを記す．
+Xを整数，Oh,Dwに変換するコードを記す．
 ーーーーーーーーーーーーーーーーーーーーーーーーーーーーーーーーーーーーーーーーーーーーーーーーーーーーー
 各変数
 D = データの数 : int, 
@@ -78,7 +75,7 @@ def generate_initial_samples(
         Number of discretization points.
     n_samples : int
         Number of initial samples.
-    encoding : {"Oh", "Dw", "Bi", "OhDw", "DwOh"}
+    encoding : {"Oh", "Dw", "OhDw", "DwOh"}
         Integer-binary encoding.
     seed : int, optional
 
@@ -182,29 +179,6 @@ def X_Dw_to_Real(N, L, M, d, X_Dw):
     X_Real = X_Int*(M-L)/(d-1)+L
     return X_Real
 
-#　二進数表現から整数へ変換
-def X_Bi_to_Real(N, L, M, d, X_Bi): 
-    binary_d = math.ceil(math.log2(d))
-    if X_Bi.ndim == 1:
-        X_Int = np.zeros(N)
-        for n in range(N):
-            I = 0
-            for i in range(n*binary_d, (n+1)*binary_d):
-                I += (2**(i-n*binary_d))*X_Bi[i]
-            X_Int[n] = I
-    elif X_Bi.ndim == 2:
-        X_Int = np.zeros((X_Bi.shape[0], N))
-        for n0 in range((X_Bi.shape[0])):
-            for n in range(N):
-                I = 0
-                for i in range(n*binary_d, (n+1)*binary_d):
-                    I += (2**(i-n*binary_d))*X_Bi[n0,i]
-                X_Int[n0,n] = I
-    else:
-        raise ValueError("X_Biは1次元または2次元の配列である必要があります。") 
-    X_Real = X_Int*(M-L)/(d-1)+L
-    return X_Real
-
 # 整数からOne-hot表現へ変換
 def X_Real_to_Oh(N, L, M, d, X_Real):
     X_Int = np.round((X_Real - L) * (d - 1) / (M - L)).astype(int)
@@ -251,31 +225,6 @@ def X_Real_to_Dw(N, L, M, d, X_Real):
         raise ValueError("X_Intは1次元または2次元の配列である必要があります。") 
     return X_Dw
 
-# 整数から二進数表現へ変換
-def X_Real_to_Bi(N, L, M, d, X_Real):
-    X_Int = np.round((X_Real - L) * (d - 1) / (M - L)).astype(int)
-    binary_d = math.ceil(math.log2(d))
-    if X_Int.ndim == 1:  # 1次元の場合
-        X_Bi = np.zeros(N * binary_d, dtype=int)  # 二進数を格納する配列を初期化
-        for n in range(N):
-            # 範囲チェック：整数が0以上C以下かを確認
-            if X_Int[n] < 0 or X_Int[n] > d-1:
-                raise ValueError(f"整数の値が範囲外です: {X_Int[n]} (許可される範囲は0から{d-1})")
-            # 整数を二進数に変換し、反転後にゼロパディング
-            X_Bi[n * binary_d:(n+1) * binary_d] = [int(digit) for digit in bin(X_Int[n])[2:].zfill(binary_d)][::-1]
-    elif X_Int.ndim == 2:  # 2次元の場合
-        X_Bi = np.zeros((X_Int.shape[0], N * binary_d), dtype=int)
-        for n0 in range(X_Int.shape[0]):
-            for n in range(N):
-                # 範囲チェック：整数が0以上C以下かを確認
-                if X_Int[n0, n] < 0 or X_Int[n0, n] > d-1:
-                    raise ValueError(f"整数の値が範囲外です: {X_Int[n0, n]} (許可される範囲は0から{d-1})")
-                # 整数を二進数に変換し、反転後にゼロパディング
-                X_Bi[n0, n * binary_d:(n+1) * binary_d] = [int(digit) for digit in bin(X_Int[n0, n])[2:].zfill(binary_d)][::-1]
-    else:
-        raise ValueError("X_Intは1次元または2次元の配列である必要があります。")    
-    return X_Bi
-
 def X_Oh_to_Dw(N, d, X_Oh):    
     if X_Oh.ndim == 1:
         X_Dw = np.zeros(N * (d-1), dtype=int)
@@ -295,27 +244,6 @@ def X_Oh_to_Dw(N, d, X_Oh):
     else:
         raise ValueError("X_Ohは1次元または2次元の配列である必要があります。")
     return X_Dw
-
-def X_Oh_to_Bi(N, d, X_Oh):
-    binary_d = math.ceil(math.log2(d))  # 必要なビット数を計算
-    if X_Oh.ndim == 1:
-        X_Bi = np.zeros(N * binary_d, dtype=int)
-        if Decode_const_check("Oh", N, d, X_Oh) == False:  # 制約チェック
-            raise ValueError(f"制約を満たしていないOhデータが存在します: {X_Oh}")
-        for n in range(N):
-            I = int(np.argmax(X_Oh[n*d:(n+1)*d]))  # One-hotから整数に変換
-            X_Bi[n*binary_d:(n+1)*binary_d] = [int(b) for b in bin(I)[2:].zfill(binary_d)][::-1]
-    elif X_Oh.ndim == 2:
-        X_Bi = np.zeros((X_Oh.shape[0], N * binary_d), dtype=int)
-        for n0 in range(X_Oh.shape[0]):
-            if Decode_const_check("Oh", N, d, X_Oh[n0]) == False:
-                raise ValueError(f"制約を満たしていないOhデータが存在します: {X_Oh[n0]}")
-            for n in range(N):
-                I = int(np.argmax(X_Oh[n0, n*d:(n+1)*d]))
-                X_Bi[n0, n*binary_d:(n+1)*binary_d] = [int(b) for b in bin(I)[2:].zfill(binary_d)][::-1]
-    else:
-        raise ValueError("X_Ohは1次元または2次元の配列である必要があります。")
-    return X_Bi
 
 def X_Dw_to_Oh(N, d, X_Dw):
     if X_Dw.ndim == 1:  # 1次元の場合
@@ -345,87 +273,11 @@ def X_Dw_to_Oh(N, d, X_Dw):
         raise ValueError("X_Dwは1次元または2次元の配列である必要があります。")
     return X_Oh
 
-def X_Dw_to_Bi(N, d, X_Dw): 
-    binary_d = math.ceil(math.log2(d))  # C+1を表すために必要なビット数を計算
-    if X_Dw.ndim == 1:  # 1次元の場合
-        X_Bi = np.zeros(N * binary_d, dtype=int)
-        if Decode_const_check("Dw", N, d, X_Dw) == False:
-            raise ValueError(f"制約を満たしていないDwは整数に変換できません: {X_Dw}")
-        for n in range(N):
-            I = int(sum(X_Dw[n * (d-1):(n + 1) * (d-1)]))  # Domain-wall表現を整数に変換
-            bin_str = bin(I)[2:].zfill(binary_d)
-            X_Bi[n * binary_d:(n + 1) * binary_d] = [int(bit) for bit in bin_str[::-1]]
-    elif X_Dw.ndim == 2:  # 2次元の場合
-        X_Bi = np.zeros((X_Dw.shape[0], N * binary_d), dtype=int)
-        for n0 in range(X_Dw.shape[0]):
-            if Decode_const_check("Dw", N, d, X_Dw[n0]) == False:
-                raise ValueError(f"制約を満たしていないDwは整数に変換できません: {X_Dw[n0]}")
-            for n in range(N):
-                I = int(sum(X_Dw[n0, n * (d-1):(n + 1) * (d-1)]))
-                bin_str = bin(I)[2:].zfill(binary_d)
-                X_Bi[n0, n * binary_d:(n + 1) * binary_d] = [int(bit) for bit in bin_str[::-1]]
-    else:
-        raise ValueError("X_Dwは1次元または2次元の配列である必要があります。")
-    return X_Bi
-
-def X_Bi_to_Oh(N, d, X_Bi):
-    binary_d = math.ceil(math.log2(d))  # C+1を表すために必要なビット数を計算
-    if X_Bi.ndim == 1:  # 1次元の場合
-        X_Oh = np.zeros(N * (d), dtype=int)  # One-hot表現の配列を初期化
-        for n in range(N):
-            I = 0
-            # バイナリから整数に変換
-            for i in range(n * binary_d, (n + 1) * binary_d):
-                I += (2 ** (i - n * binary_d)) * X_Bi[i]
-            # 整数をOne-hot表現に変換
-            X_Oh[n * (d) + int(I)] = 1  # 該当する位置に1をセット
-            
-    elif X_Bi.ndim == 2:  # 2次元の場合
-        X_Oh = np.zeros((X_Bi.shape[0], N * (d)), dtype=int)
-        for n0 in range(X_Bi.shape[0]):
-            for n in range(N):
-                I = 0
-                # バイナリから整数に変換
-                for i in range(n * binary_d, (n + 1) * binary_d):
-                    I += (2 ** (i - n * binary_d)) * X_Bi[n0, i]
-                # 整数をOne-hot表現に変換
-                X_Oh[n0, n * (d) + int(I)] = 1  # 該当する位置に1をセット
-    else:
-        raise ValueError("X_Biは1次元または2次元の配列である必要があります。")
-    return X_Oh
-
-def X_Bi_to_Dw(N, d, X_Bi):
-    binary_d = math.ceil(math.log2(d))  # C+1を表すために必要なビット数を計算   
-    if X_Bi.ndim == 1:  # 1次元の場合
-        X_Dw = np.zeros(N * (d-1), dtype=int)  # Domain-wall表現の配列を初期化
-        for n in range(N):
-            I = 0
-            # バイナリから整数へ変換
-            for i in range(n*binary_d, (n+1)*binary_d):
-                I += (2**(i-n*binary_d)) * X_Bi[i]
-            # 整数をDomain-wall表現に変換
-            X_Dw[n*(d-1):(n+1)*(d-1)] = [1] * int(I) + [0] * ((d-1) - int(I))
-    elif X_Bi.ndim == 2:  # 2次元の場合
-        X_Dw = np.zeros((X_Bi.shape[0], N * (d-1)), dtype=int)
-        for n0 in range(X_Bi.shape[0]):
-            for n in range(N):
-                I = 0
-                # バイナリから整数へ変換
-                for i in range(n*binary_d, (n+1)*binary_d):
-                    I += (2**(i-n*binary_d)) * X_Bi[n0, i]
-                # 整数をDomain-wall表現に変換
-                X_Dw[n0, n*(d-1):(n+1)*(d-1)] = [1] * int(I) + [0] * (d-1 - int(I))
-    else:
-        raise ValueError("X_Biは1次元または2次元の配列である必要があります。")  # エラー処理
-    return X_Dw
-
 def X_Real_to_Any(N, L, M, d, X_Real, EncodingMode):
     if EncodingMode=="Oh" or EncodingMode=="OhDw":
         X_Any = X_Real_to_Oh(N, L, M, d, X_Real)
     elif EncodingMode=="Dw" or EncodingMode=="DwOh":
         X_Any = X_Real_to_Dw(N, L, M, d, X_Real)
-    elif EncodingMode=="Bi":
-        X_Any = X_Real_to_Bi(N, L, M, d, X_Real)
     elif EncodingMode=="Real":
         X_Any = X_Real
     else:
@@ -437,8 +289,6 @@ def X_Any_to_Real(N, L, M, d, X_Any, EncodingMode):
         X_Real = X_Oh_to_Real(N, L, M, d, X_Any)
     elif EncodingMode=="Dw" or EncodingMode=="DwOh":
         X_Real = X_Dw_to_Real(N, L, M, d, X_Any)
-    elif EncodingMode=="Bi":
-        X_Real = X_Bi_to_Real(N, L, M, d, X_Any)
     elif EncodingMode=="Real":
         X_Real = X_Any
     else:
@@ -826,7 +676,7 @@ def run(
 ):
     """指定されたエンコーディング方式でFMQAを実行する。"""
 
-    valid_encodings = {"Oh", "Dw", "Bi", "OhDw", "DwOh"}
+    valid_encodings = {"Oh", "Dw", "OhDw", "DwOh"}
     if encoding not in valid_encodings:
         raise ValueError(
             f"encodingには{sorted(valid_encodings)}のいずれかを指定してください。"
@@ -848,54 +698,36 @@ def run(
     if data.ndim != 2:
         raise ValueError("initial_dataは2次元配列にしてください。")
 
-    if encoding == "Bi":
-        expected_size = N * math.ceil(math.log2(q))
-        if data.shape[1] == N:
-            data = X_Real_to_Bi(N, L, M, q, data)
-        elif data.shape[1] != expected_size:
-            raise ValueError(
-                f"Biのinitial_dataの列数は{N}または{expected_size}にしてください。"
-            )
-
-        @blackbox
-        def optimization_blackbox(  # pyright: ignore[reportRedeclaration]
-            x: list[int] = [BinaryVariable() for _ in range(expected_size)],
-        ):
-            real_x = X_Bi_to_Real(N, L, M, q, np.asarray(x))
-            return float(bb_func(real_x))
-
+    training_mode = "Oh" if encoding in {"Oh", "OhDw"} else "Dw"
+    expected_size = N * q if training_mode == "Oh" else N * (q - 1)
+    if data.shape[1] == expected_size:
+        dataset_x = X_Any_to_Real(N, L, M, q, data, training_mode)
+    elif data.shape[1] == N:
         dataset_x = data
     else:
-        training_mode = "Oh" if encoding in {"Oh", "OhDw"} else "Dw"
-        expected_size = N * q if training_mode == "Oh" else N * (q - 1)
-        if data.shape[1] == expected_size:
-            dataset_x = X_Any_to_Real(N, L, M, q, data, training_mode)
-        elif data.shape[1] == N:
-            dataset_x = data
-        else:
-            raise ValueError(
-                f"{training_mode}のinitial_dataの列数は{N}または"
-                f"{expected_size}にしてください。"
-            )
-
-        variable_encoding = (
-            EncodingMethod.OneHot
-            if training_mode == "Oh"
-            else EncodingMethod.DomainWall
+        raise ValueError(
+            f"{training_mode}のinitial_dataの列数は{N}または"
+            f"{expected_size}にしてください。"
         )
 
-        @blackbox
-        def optimization_blackbox(
-            x: list[float] = [
-                RealVariable(
-                    bounds=(L, M),
-                    encoding=variable_encoding,
-                    discretization_spec=DiscretizationSpec(num_bins=q),
-                )
-                for _ in range(N)
-            ],
-        ):
-            return float(bb_func(np.asarray(x, dtype=float)))
+    variable_encoding = (
+        EncodingMethod.OneHot
+        if training_mode == "Oh"
+        else EncodingMethod.DomainWall
+    )
+
+    @blackbox
+    def optimization_blackbox(
+        x: list[float] = [
+            RealVariable(
+                bounds=(L, M),
+                encoding=variable_encoding,
+                discretization_spec=DiscretizationSpec(num_bins=q),
+            )
+            for _ in range(N)
+        ],
+    ):
+        return float(bb_func(np.asarray(x, dtype=float)))
 
     dataset_y = np.asarray(
         [optimization_blackbox(x) for x in dataset_x], dtype=float
@@ -907,28 +739,19 @@ def run(
     trainer.lr_scheduler_params = lr_scheduler_params or {}
     trainer.num_factors = k
 
-    if encoding == "Bi":
-        optimizer = Optimizer(
-            blackbox=optimization_blackbox,
-            trainer=trainer,
-            client=client,
-            training_data=Dataset(dataset_x, dataset_y),
-            seed=seed,
-        )
-    else:
-        optimizer = EncodingSwitchOptimizer(
-            blackbox=optimization_blackbox,
-            trainer=trainer,
-            client=client,
-            training_data=Dataset(dataset_x, dataset_y),
-            seed=seed,
-            search_encoding=(
-                EncodingMethod.DomainWall
-                if encoding in {"Dw", "OhDw"}
-                else EncodingMethod.OneHot
-            ),
-            encoding_penalty=encoding_penalty,
-        )
+    optimizer = EncodingSwitchOptimizer(
+        blackbox=optimization_blackbox,
+        trainer=trainer,
+        client=client,
+        training_data=Dataset(dataset_x, dataset_y),
+        seed=seed,
+        search_encoding=(
+            EncodingMethod.DomainWall
+            if encoding in {"Dw", "OhDw"}
+            else EncodingMethod.OneHot
+        ),
+        encoding_penalty=encoding_penalty,
+    )
     optimizer.optimize(
         n_iter,
         max_deduplication_trials=max_deduplication_trials,
